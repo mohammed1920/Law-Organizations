@@ -1,0 +1,71 @@
+name: Admin Question Corrector
+
+on:
+  repository_dispatch:
+    types: [correct_question]
+
+jobs:
+  correct:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Run Correction Script
+      env:
+        Q_TEXT: ${{ github.event.client_payload.question_text }}
+        A_TEXT: ${{ github.event.client_payload.correct_answer_text }}
+        FILE_NAME: ${{ github.event.client_payload.file_name }}
+      run: |
+        python -c "
+        import os, re
+
+        file_name = os.environ['FILE_NAME']
+        q_text = os.environ['Q_TEXT'].strip()
+        a_text = os.environ['A_TEXT'].strip()
+
+        if not os.path.exists(file_name):
+            print(f'File {file_name} not found!')
+            exit(1)
+
+        with open(file_name, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # البحث عن السؤال داخل مصفوفة الجافاسكربت بالملف
+        # وتعديله برمجياً لجعل الإجابة المصححة هي الخيار الأول دائماً index 0
+        pattern = r'\{\s*q\s*:\s*[\x22\x27]' + re.escape(q_text) + r'[\x22\x27]\s*,\s*options\s*:\s*\[(.*?)\]\s*,\s*correct\s*:\s*(\d+)\s*\}'
+        
+        match = re.search(pattern, content, re.DOTALL)
+        if not match:
+            print('Question text not found in the file!')
+            exit(1)
+
+        options_str = match.group(1)
+        options = [opt.strip().strip('\x22\x27') for opt in options_str.split(',') if opt.strip()]
+        
+        if a_text in options:
+            options.remove(a_text)
+        options.insert(0, a_text) # جعل الإجابة الصحيحة هي الأولى دائماً
+        
+        new_options_str = ', '.join([f'\"{opt}\"' for opt in options])
+        new_question_block = f'{{ q: \"{q_text}\", options: [{new_options_str}], correct: 0 }}'
+        
+        updated_content = content.replace(match.group(0), new_question_block)
+
+        with open(file_name, 'w', encoding='utf-8') as f:
+            f.write(updated_content)
+        print('Question corrected successfully!')
+        "
+
+    - name: Commit and Push changes
+      run: |
+        git config --global user.name "Admin Auto Corrector"
+        git config --global user.email "admin-corrector@github.com"
+        git add .
+        git diff-index --quiet HEAD || git commit -m "🔧 تصحيح سؤال تلقائي بواسطة الأدمن"
+        git push
